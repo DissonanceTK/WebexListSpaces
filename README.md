@@ -5,7 +5,10 @@ This Python script retrieves the Webex group spaces you belong to and writes two
 ## Prerequisites
 
 - Python 3.8 or later
-- A Webex personal access token with `spark:rooms_read` scope
+- A Webex personal access token with at least `spark:rooms_read` scope
+- `spark:teams_read` scope if you use `--group-by team`
+
+Create a token in the [Webex Developer Portal](https://developer.webex.com/docs/getting-started).
 
 ## Setup
 
@@ -29,21 +32,19 @@ This Python script retrieves the Webex group spaces you belong to and writes two
    pip install -r requirements.txt
    ```
 
-4. Set your Webex access token as an environment variable.
-
-   You can create a token in the [Webex Developer Portal](https://developer.webex.com/docs/getting-started).
+4. Set your Webex access token:
 
    ```bash
    export WEBEX_ACCESS_TOKEN="your-personal-access-token"
    ```
 
-   On Windows (Command Prompt):
+   Windows (Command Prompt):
 
    ```cmd
    set WEBEX_ACCESS_TOKEN=your-personal-access-token
    ```
 
-   On Windows (PowerShell):
+   Windows (PowerShell):
 
    ```powershell
    $env:WEBEX_ACCESS_TOKEN = "your-personal-access-token"
@@ -51,24 +52,99 @@ This Python script retrieves the Webex group spaces you belong to and writes two
 
 ## Usage
 
-Run the script from the repository directory:
+Basic export:
 
 ```bash
 python export_webex_spaces.py
 ```
 
-Optional output paths:
+Custom output paths:
 
 ```bash
 python export_webex_spaces.py --txt my-spaces.txt --csv my-spaces.csv
 ```
 
-After execution, the script creates:
+Group spaces by Webex team, creator, or both:
 
-- `WebexSpaces.txt`: Plain text listing of space names and deep links
-- `WebexSpaces.csv`: Tab-separated CSV with a header row (`Space Name`, `Space Link`)
+```bash
+python export_webex_spaces.py --group-by team
+python export_webex_spaces.py --group-by creator
+python export_webex_spaces.py --group-by team,creator
+```
 
-The script paginates through all results from the Webex API and exports group spaces sorted by last activity.
+Progress is printed while spaces are fetched (one line per API page). Use `--quiet` to disable it.
+
+### Output files
+
+**`WebexSpaces.txt`** — plain text listing of space names and deep links.
+
+Without grouping:
+
+```
+Space Name: Project Alpha
+Space Link: webexteams://im?space=...
+
+Space Name: Support Queue
+Space Link: webexteams://im?space=...
+```
+
+With `--group-by team,creator`:
+
+```
+=== Team: Engineering ===
+
+--- Created by me ---
+
+Space Name: Project Alpha
+Space Link: webexteams://im?space=...
+
+--- Created by others ---
+
+Space Name: Support Queue
+Space Link: webexteams://im?space=...
+```
+
+**`WebexSpaces.csv`** — tab-separated values with a header row.
+
+| Mode | CSV columns |
+| --- | --- |
+| Default | `Space Name`, `Space Link` |
+| `--group-by team` | `Team`, `Space Name`, `Space Link` |
+| `--group-by creator` | `Creator`, `Space Name`, `Space Link` |
+| `--group-by team,creator` | `Team`, `Creator`, `Space Name`, `Space Link` |
+
+### Grouping behavior
+
+- **Team** — spaces are grouped under their Webex Team name. Spaces with no team appear under `No team`.
+- **Creator** — spaces you created are labeled `Created by me`; all others are `Created by others`.
+- **Team + creator** — nested groups: team first, then creator within each team.
+
+Webex App **space sections** (personal folders you create in the client) are not available through the Webex API and cannot be exported by this script.
+
+### Command-line options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--txt` | `WebexSpaces.txt` | Output text file path |
+| `--csv` | `WebexSpaces.csv` | Output CSV file path |
+| `--group-by` | _(none)_ | Comma-separated fields: `team`, `creator` |
+| `--sort-by` | `id` | API sort order: `id`, `lastactivity`, or `created` |
+| `--page-size` | `100` | Rooms requested per API page |
+| `--max-pages` | `1000` | Safety limit on API pages fetched |
+| `--max-empty-pages` | `25` | Stop after this many consecutive empty pages |
+| `--quiet` | off | Disable progress output |
+
+By default, spaces are sorted by room ID during API pagination for reliable results on large accounts. Use `--sort-by lastactivity` if you prefer activity order, though Webex documents limitations for accounts in thousands of spaces.
+
+Example with additional options:
+
+```bash
+python export_webex_spaces.py --group-by team,creator --sort-by id --page-size 100 --max-pages 1000
+```
+
+### Large accounts and interruptions
+
+The script fetches all spaces from the Webex API with pagination guardrails to avoid infinite loops. If you press Ctrl+C while fetching, any spaces retrieved up to that point are written to the output files before the script exits.
 
 ## Security Note
 
