@@ -1,47 +1,83 @@
 # Webex Spaces Exporter
 
-This Python script retrieves a list of Webex spaces that the user is a member of and generates two files: `WebexSpaces.txt` and `WebexSpaces.csv`, containing the names of the spaces and links to them in plain text and tab-delineated CSV format, respectively.
+This Python script retrieves the Webex group spaces you belong to and writes two files: `WebexSpaces.txt` and `WebexSpaces.csv`. Each file contains space names and deep links that open the space in the Webex app.
 
 ## Prerequisites
 
-- Python 3.x
-- `requests` library
-- `base64` library
-- A valid Webex access token
+- Python 3.8 or later
+- A Webex personal access token with `spark:rooms_read` scope
 
 ## Setup
 
-1. Clone the repository to your local machine.\
-`git clone https://github.com/your-username/webex-spaces-exporter.git`\
-`cd webex-spaces-exporter`
+1. Clone the repository:
 
-2. Install the required Python packages.\
-`pip install requests`\
-`pip install base64`
+   ```bash
+   git clone https://github.com/DissonanceTK/WebexListSpaces.git
+   cd WebexListSpaces
+   ```
 
-3. Update the script with your Webex access token.
-Open the script in a text editor and replace `'YOUR_PERSONAL_ACCESS_TOKEN'` with your actual Webex access token.\
-You can get a personal Webex API access token by logging in to the [Webex Developer Portal](https://developer.webex.com/docs/getting-started).
+2. (Recommended) Create and activate a virtual environment:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   ```
+
+3. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Set your Webex access token as an environment variable.
+
+   You can create a token in the [Webex Developer Portal](https://developer.webex.com/docs/getting-started).
+
+   ```bash
+   export WEBEX_ACCESS_TOKEN="your-personal-access-token"
+   ```
+
+   On Windows (Command Prompt):
+
+   ```cmd
+   set WEBEX_ACCESS_TOKEN=your-personal-access-token
+   ```
+
+   On Windows (PowerShell):
+
+   ```powershell
+   $env:WEBEX_ACCESS_TOKEN = "your-personal-access-token"
+   ```
 
 ## Usage
 
-Run the script from the command line:\
-`python export_webex_spaces.py`
+Run the script from the repository directory:
 
+```bash
+python export_webex_spaces.py
+```
 
-After execution, the script will create two files in the current directory:
+Optional output paths:
 
-- `WebexSpaces.txt`: A plain text file listing the names of Webex spaces and clickable links to open them in the Webex app.
-- `WebexSpaces.csv`: A CSV file with the same information, tab-separated.
+```bash
+python export_webex_spaces.py --txt my-spaces.txt --csv my-spaces.csv
+```
+
+After execution, the script creates:
+
+- `WebexSpaces.txt`: Plain text listing of space names and deep links
+- `WebexSpaces.csv`: Tab-separated CSV with a header row (`Space Name`, `Space Link`)
+
+The script paginates through all results from the Webex API and exports group spaces sorted by last activity.
 
 ## Security Note
 
-Please ensure that your Webex access token is stored securely and not exposed in the script or committed to version control. Use environment variables or other secure methods to manage sensitive credentials.
+Do not hardcode your Webex access token in source code or commit it to version control. Use environment variables or another secure secret store. Rotate tokens if they are exposed.
 
 ## Contributing
 
-Contributions to this project are welcome. Please fork the repository and submit a pull request with your changes.
+Contributions are welcome. Fork the repository and submit a pull request with your changes.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
