@@ -15,6 +15,7 @@ build/
 # Script output
 WebexSpaces.txt
 WebexSpaces.csv
+WebexSpaces.md
 eurl.json
 
 # Environment and secrets

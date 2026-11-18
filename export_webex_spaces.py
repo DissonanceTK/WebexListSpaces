@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import contextlib
 import csv
 import json
 import os
@@ -390,16 +391,110 @@ def group_sort_key(group_values: tuple[str, ...]) -> tuple:
     return tuple(key)
 
 
+class TextOutput:
+    """Plain-text listing."""
+
+    def __init__(self, file) -> None:
+        self.file = file
+
+    def start(self) -> None:
+        pass
+
+    def heading(self, level: int, text: str) -> None:
+        marker = "===" if level == 0 else "---"
+        self.file.write(f"{marker} {text} {marker}\n\n")
+
+    def entry(self, name, deep_link, web_link, eurl, show_eurl) -> None:
+        self.file.write(f"Space Name: {name}\n")
+        self.file.write(f"Space Link: {deep_link}\n")
+        self.file.write(f"Space Web Link: {web_link}\n")
+        if show_eurl:
+            self.file.write(f"Eurl: {eurl or '(not found)'}\n")
+        self.file.write("\n")
+
+    def missing(self, name) -> None:
+        self.file.write(f"Space Name: {name} (No space link available)\n\n")
+
+    def flush(self) -> None:
+        self.file.flush()
+
+
+class MarkdownOutput:
+    """Markdown listing: headings per group, one bullet per space."""
+
+    _ESCAPE = str.maketrans({c: "\\" + c for c in "\\`*_{}[]<>|#"})
+
+    def __init__(self, file) -> None:
+        self.file = file
+
+    def start(self) -> None:
+        self.file.write("# Webex Spaces\n\n")
+
+    def heading(self, level: int, text: str) -> None:
+        self.file.write(f"{'#' * (level + 2)} {self._esc(text)}\n\n")
+
+    def entry(self, name, deep_link, web_link, eurl, show_eurl) -> None:
+        links = [f"[App]({deep_link})", f"[Web]({web_link})"]
+        if eurl:
+            links.append(f"[Eurl]({eurl})")
+        self.file.write(f"- **{self._esc(name)}** — {' · '.join(links)}\n")
+
+    def missing(self, name) -> None:
+        self.file.write(f"- **{self._esc(name)}** — _no space link available_\n")
+
+    def flush(self) -> None:
+        self.file.flush()
+
+    @classmethod
+    def _esc(cls, text: str) -> str:
+        return " ".join(str(text).split()).translate(cls._ESCAPE)
+
+
+class Outputs:
+    """Fan out writes to every enabled text-style output."""
+
+    def __init__(self, outputs: list) -> None:
+        self.outputs = outputs
+        self._last_was_entry = False
+
+    def start(self) -> None:
+        for output in self.outputs:
+            output.start()
+
+    def heading(self, level: int, text: str) -> None:
+        self._separate()
+        for output in self.outputs:
+            output.heading(level, text)
+
+    def entry(self, *args) -> None:
+        for output in self.outputs:
+            output.entry(*args)
+        self._last_was_entry = True
+
+    def missing(self, name) -> None:
+        for output in self.outputs:
+            output.missing(name)
+        self._last_was_entry = True
+
+    def _separate(self) -> None:
+        # Markdown bullet lists need a blank line before the next heading.
+        if self._last_was_entry:
+            for output in self.outputs:
+                if isinstance(output, MarkdownOutput):
+                    output.file.write("\n")
+        self._last_was_entry = False
+
+    def flush(self) -> None:
+        for output in self.outputs:
+            output.flush()
+
+
 def write_group_heading(
-    txt_file,
+    out,
     group_values: tuple[str, ...],
     level: int,
 ) -> None:
-    heading = group_values[level]
-    if level == 0:
-        txt_file.write(f"=== {heading} ===\n\n")
-    else:
-        txt_file.write(f"--- {heading} ---\n\n")
+    out.heading(level, group_values[level])
 
 
 def build_csv_row(
@@ -432,7 +527,7 @@ def build_csv_row(
 
 def write_room_entry(
     room: dict,
-    txt_file,
+    out,
     writer: csv.writer,
     csv_columns: list[str],
     group_fields: list[str],
@@ -450,15 +545,10 @@ def write_room_entry(
     eurl = (eurl_links or {}).get(room_id or "")
 
     if deep_link:
-        txt_file.write(f"Space Name: {room_name}\n")
-        txt_file.write(f"Space Link: {deep_link}\n")
-        txt_file.write(f"Space Web Link: {web_link}\n")
-        if eurl_links is not None:
-            txt_file.write(f"Eurl: {eurl or '(not found)'}\n")
-        txt_file.write("\n")
+        out.entry(room_name, deep_link, web_link, eurl, eurl_links is not None)
         return True
 
-    txt_file.write(f"Space Name: {room_name} (No space link available)\n\n")
+    out.missing(room_name)
     return False
 
 
@@ -483,7 +573,7 @@ def csv_columns_for_group_fields(
 
 def write_flat_export(
     rooms: list[dict],
-    txt_file,
+    out,
     writer: csv.writer,
     eurl_links: Optional[dict[str, str]] = None,
 ) -> int:
@@ -491,7 +581,7 @@ def write_flat_export(
     csv_columns = space_columns(eurl_links)
     for room in sorted(rooms, key=lambda item: (item.get("title") or "").casefold()):
         if write_room_entry(
-            room, txt_file, writer, csv_columns, [], (), eurl_links
+            room, out, writer, csv_columns, [], (), eurl_links
         ):
             count += 1
     return count
@@ -499,7 +589,7 @@ def write_flat_export(
 
 def write_grouped_export(
     rooms: list[dict],
-    txt_file,
+    out,
     writer: csv.writer,
     group_fields: list[str],
     *,
@@ -533,11 +623,11 @@ def write_grouped_export(
                     current_group is None
                     or current_group[: level + 1] != group_values[: level + 1]
                 ):
-                    write_group_heading(txt_file, group_values, level)
+                    write_group_heading(out, group_values, level)
             current_group = group_values
 
         if write_room_entry(
-            room, txt_file, writer, csv_columns, group_fields, group_values, eurl_links
+            room, out, writer, csv_columns, group_fields, group_values, eurl_links
         ):
             count += 1
 
@@ -555,6 +645,7 @@ def export_spaces(
     max_consecutive_empty_pages: int,
     verbose: bool,
     eurl_spaces: Optional[list[dict]] = None,
+    md_path: Optional[str] = None,
 ) -> int:
     session = requests.Session()
 
@@ -591,9 +682,17 @@ def export_spaces(
                 print("Fetching teams...", file=sys.stderr)
             teams = fetch_teams(session, headers)
 
-    with open(txt_path, "w", encoding="utf-8") as txt_file, open(
-        csv_path, "w", encoding="utf-8", newline=""
-    ) as csv_file:
+    with contextlib.ExitStack() as stack:
+        txt_file = stack.enter_context(open(txt_path, "w", encoding="utf-8"))
+        csv_file = stack.enter_context(
+            open(csv_path, "w", encoding="utf-8", newline="")
+        )
+        outputs: list = [TextOutput(txt_file)]
+        if md_path:
+            md_file = stack.enter_context(open(md_path, "w", encoding="utf-8"))
+            outputs.append(MarkdownOutput(md_file))
+        out = Outputs(outputs)
+        out.start()
         if group_fields:
             csv_columns = csv_columns_for_group_fields(group_fields, eurl_links)
         else:
@@ -601,13 +700,13 @@ def export_spaces(
 
         writer = csv.writer(csv_file, delimiter="\t")
         writer.writerow(csv_columns)
-        txt_file.flush()
+        out.flush()
         csv_file.flush()
 
         if group_fields:
             count = write_grouped_export(
                 rooms,
-                txt_file,
+                out,
                 writer,
                 group_fields,
                 person_id=person_id,
@@ -615,9 +714,9 @@ def export_spaces(
                 eurl_links=eurl_links,
             )
         else:
-            count = write_flat_export(rooms, txt_file, writer, eurl_links)
+            count = write_flat_export(rooms, out, writer, eurl_links)
 
-        txt_file.flush()
+        out.flush()
         csv_file.flush()
 
     return count
@@ -636,6 +735,14 @@ def main() -> None:
         "--csv",
         default="WebexSpaces.csv",
         help="Output CSV file path (default: WebexSpaces.csv)",
+    )
+    parser.add_argument(
+        "--md",
+        nargs="?",
+        const="WebexSpaces.md",
+        default=None,
+        metavar="PATH",
+        help="Also write a Markdown file (default path if no value: WebexSpaces.md)",
     )
     parser.add_argument(
         "--group-by",
@@ -711,16 +818,20 @@ def main() -> None:
             max_consecutive_empty_pages=args.max_empty_pages,
             verbose=not args.quiet,
             eurl_spaces=eurl_spaces,
+            md_path=args.md,
         )
     except KeyboardInterrupt:
         print(
             "\nInterrupted. Partial results were saved to "
-            f"{args.txt} and {args.csv}.",
+            f"{args.txt} and {args.csv}" + (f" (and {args.md})" if args.md else "") + ".",
             file=sys.stderr,
         )
         sys.exit(130)
 
-    print(f"Exported {count} spaces to {args.txt} and {args.csv}")
+    outputs = f"{args.txt} and {args.csv}"
+    if args.md:
+        outputs = f"{args.txt}, {args.csv} and {args.md}"
+    print(f"Exported {count} spaces to {outputs}")
 
 
 if __name__ == "__main__":

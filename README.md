@@ -121,6 +121,16 @@ Space Link: webexteams://im?space=...
 Space Web Link: https://web.webex.com/spaces/...
 ```
 
+**`WebexSpaces.md`** — optional (`--md`). Grouping becomes `##`/`###` headings, and each space is a bullet with App, Web and (if available) Eurl links:
+
+```markdown
+## Team: Engineering
+
+### Created by me
+
+- **Project Alpha** — [App](webexteams://im?space=...) · [Web](https://web.webex.com/spaces/...) · [Eurl](https://eurl.io/#...)
+```
+
 **`WebexSpaces.csv`** — tab-separated values with a header row.
 
 | Mode | CSV columns |
@@ -144,6 +154,7 @@ Webex App **space sections** (personal folders you create in the client) are not
 | --- | --- | --- |
 | `--txt` | `WebexSpaces.txt` | Output text file path |
 | `--csv` | `WebexSpaces.csv` | Output CSV file path |
+| `--md` | _(off)_ | Also write Markdown; optional path (default `WebexSpaces.md`) |
 | `--group-by` | _(none)_ | Comma-separated fields: `team`, `creator` |
 | `--sort-by` | `id` | API sort order: `id`, `lastactivity`, or `created` |
 | `--page-size` | `100` | Rooms requested per API page |
