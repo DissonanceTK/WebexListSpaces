@@ -4,6 +4,7 @@
 import argparse
 import base64
 import csv
+import json
 import os
 import sys
 import time
@@ -20,6 +21,9 @@ VALID_GROUP_FIELDS = ("team", "creator")
 CREATOR_CREATED_BY_ME = "Created by me"
 CREATOR_CREATED_BY_OTHERS = "Created by others"
 TEAM_NONE_LABEL = "No team"
+SPACE_COLUMNS = ("Space Name", "Space Link", "Space Web Link")
+EURL_COLUMN = "Eurl"
+EURL_BASE = "https://eurl.io/#"
 
 
 def get_access_token() -> str:
@@ -272,13 +276,76 @@ def collect_rooms(
     return rooms
 
 
-def room_to_deep_link(room_id: str) -> Optional[str]:
+def room_uuid(room_id: str) -> Optional[str]:
     try:
         decoded_uri = base64.b64decode(room_id).decode("utf-8")
-        uuid = decoded_uri.split("/")[-1]
-        return f"webexteams://im?space={uuid}"
     except (ValueError, UnicodeDecodeError):
         return None
+    return decoded_uri.split("/")[-1] or None
+
+
+def room_to_deep_link(room_id: str) -> Optional[str]:
+    uuid = room_uuid(room_id)
+    return f"webexteams://im?space={uuid}" if uuid else None
+
+
+def room_to_web_link(room_id: str) -> Optional[str]:
+    uuid = room_uuid(room_id)
+    return f"https://web.webex.com/spaces/{uuid}" if uuid else None
+
+
+def load_eurl_spaces(path: str) -> list[dict]:
+    """Load spaces saved from https://eurl.io/api/spaces (signed in)."""
+    try:
+        with open(path, encoding="utf-8") as eurl_file:
+            data = json.load(eurl_file)
+    except (OSError, ValueError) as exc:
+        print(f"Error: Could not read --eurl-file {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    spaces = data.get("spaces") if isinstance(data, dict) else data
+    if not isinstance(spaces, list):
+        print(
+            "Error: --eurl-file must be the JSON from https://eurl.io/api/spaces "
+            '(an object with a "spaces" list, or a list of spaces).',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return [space for space in spaces if isinstance(space, dict) and space.get("shortId")]
+
+
+def build_eurl_links(rooms: list[dict], eurl_spaces: list[dict]) -> dict[str, str]:
+    """Map Webex room ID -> Eurl join URL, matching by title."""
+    by_title: dict[str, list[str]] = {}
+    for space in eurl_spaces:
+        title = (space.get("title") or "").strip().casefold()
+        by_title.setdefault(title, []).append(space["shortId"])
+
+    room_title_counts: dict[str, int] = {}
+    for room in rooms:
+        title = (room.get("title") or "").strip().casefold()
+        room_title_counts[title] = room_title_counts.get(title, 0) + 1
+
+    links: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for room in rooms:
+        room_id = room.get("id")
+        title = (room.get("title") or "").strip().casefold()
+        short_ids = by_title.get(title)
+        if not room_id or not short_ids:
+            continue
+        if len(short_ids) > 1 or room_title_counts[title] > 1:
+            ambiguous.add(room.get("title") or "")
+            continue
+        links[room_id] = f"{EURL_BASE}{short_ids[0]}"
+
+    if ambiguous:
+        print(
+            f"Skipped {len(ambiguous)} space title(s) shared by more than one "
+            "space (Eurl match is by title): " + "; ".join(sorted(ambiguous)[:10]),
+            file=sys.stderr,
+        )
+    return links
 
 
 def room_creator_label(room: dict, person_id: str) -> str:
@@ -340,14 +407,18 @@ def build_csv_row(
     csv_columns: list[str],
     group_fields: list[str],
     group_values: tuple[str, ...],
+    eurl_links: Optional[dict[str, str]] = None,
 ) -> list[str]:
     room_name = room.get("title", "")
     room_id = room.get("id")
     deep_link = room_to_deep_link(room_id) if room_id else None
+    web_link = room_to_web_link(room_id) if room_id else None
 
     value_map = {
         "Space Name": room_name,
         "Space Link": deep_link or "",
+        "Space Web Link": web_link or "",
+        EURL_COLUMN: (eurl_links or {}).get(room_id or "", ""),
     }
     group_index = 0
     if "team" in group_fields:
@@ -366,29 +437,47 @@ def write_room_entry(
     csv_columns: list[str],
     group_fields: list[str],
     group_values: tuple[str, ...],
+    eurl_links: Optional[dict[str, str]] = None,
 ) -> bool:
     room_name = room.get("title", "")
     room_id = room.get("id")
     deep_link = room_to_deep_link(room_id) if room_id else None
+    web_link = room_to_web_link(room_id) if room_id else None
 
-    writer.writerow(build_csv_row(room, csv_columns, group_fields, group_values))
+    writer.writerow(
+        build_csv_row(room, csv_columns, group_fields, group_values, eurl_links)
+    )
+    eurl = (eurl_links or {}).get(room_id or "")
 
     if deep_link:
         txt_file.write(f"Space Name: {room_name}\n")
-        txt_file.write(f"Space Link: {deep_link}\n\n")
+        txt_file.write(f"Space Link: {deep_link}\n")
+        txt_file.write(f"Space Web Link: {web_link}\n")
+        if eurl_links is not None:
+            txt_file.write(f"Eurl: {eurl or '(not found)'}\n")
+        txt_file.write("\n")
         return True
 
     txt_file.write(f"Space Name: {room_name} (No space link available)\n\n")
     return False
 
 
-def csv_columns_for_group_fields(group_fields: list[str]) -> list[str]:
+def space_columns(eurl_links: Optional[dict[str, str]]) -> list[str]:
+    columns = list(SPACE_COLUMNS)
+    if eurl_links is not None:
+        columns.append(EURL_COLUMN)
+    return columns
+
+
+def csv_columns_for_group_fields(
+    group_fields: list[str], eurl_links: Optional[dict[str, str]] = None
+) -> list[str]:
     columns: list[str] = []
     if "team" in group_fields:
         columns.append("Team")
     if "creator" in group_fields:
         columns.append("Creator")
-    columns.extend(["Space Name", "Space Link"])
+    columns.extend(space_columns(eurl_links))
     return columns
 
 
@@ -396,11 +485,14 @@ def write_flat_export(
     rooms: list[dict],
     txt_file,
     writer: csv.writer,
+    eurl_links: Optional[dict[str, str]] = None,
 ) -> int:
     count = 0
-    csv_columns = ["Space Name", "Space Link"]
+    csv_columns = space_columns(eurl_links)
     for room in sorted(rooms, key=lambda item: (item.get("title") or "").casefold()):
-        if write_room_entry(room, txt_file, writer, csv_columns, [], ()):
+        if write_room_entry(
+            room, txt_file, writer, csv_columns, [], (), eurl_links
+        ):
             count += 1
     return count
 
@@ -413,8 +505,9 @@ def write_grouped_export(
     *,
     person_id: str,
     teams: dict[str, str],
+    eurl_links: Optional[dict[str, str]] = None,
 ) -> int:
-    csv_columns = csv_columns_for_group_fields(group_fields)
+    csv_columns = csv_columns_for_group_fields(group_fields, eurl_links)
     grouped_rooms = sorted(
         rooms,
         key=lambda room: (
@@ -444,7 +537,7 @@ def write_grouped_export(
             current_group = group_values
 
         if write_room_entry(
-            room, txt_file, writer, csv_columns, group_fields, group_values
+            room, txt_file, writer, csv_columns, group_fields, group_values, eurl_links
         ):
             count += 1
 
@@ -461,6 +554,7 @@ def export_spaces(
     max_pages: int,
     max_consecutive_empty_pages: int,
     verbose: bool,
+    eurl_spaces: Optional[list[dict]] = None,
 ) -> int:
     session = requests.Session()
 
@@ -475,6 +569,15 @@ def export_spaces(
         max_consecutive_empty_pages=max_consecutive_empty_pages,
         verbose=verbose,
     )
+
+    eurl_links: Optional[dict[str, str]] = None
+    if eurl_spaces is not None:
+        eurl_links = build_eurl_links(rooms, eurl_spaces)
+        if verbose:
+            print(
+                f"Matched {len(eurl_links)} of {len(rooms)} spaces to Eurl links.",
+                file=sys.stderr,
+            )
 
     person_id = ""
     teams: dict[str, str] = {}
@@ -492,9 +595,9 @@ def export_spaces(
         csv_path, "w", encoding="utf-8", newline=""
     ) as csv_file:
         if group_fields:
-            csv_columns = csv_columns_for_group_fields(group_fields)
+            csv_columns = csv_columns_for_group_fields(group_fields, eurl_links)
         else:
-            csv_columns = ["Space Name", "Space Link"]
+            csv_columns = space_columns(eurl_links)
 
         writer = csv.writer(csv_file, delimiter="\t")
         writer.writerow(csv_columns)
@@ -509,9 +612,10 @@ def export_spaces(
                 group_fields,
                 person_id=person_id,
                 teams=teams,
+                eurl_links=eurl_links,
             )
         else:
-            count = write_flat_export(rooms, txt_file, writer)
+            count = write_flat_export(rooms, txt_file, writer, eurl_links)
 
         txt_file.flush()
         csv_file.flush()
@@ -566,6 +670,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--eurl-file",
+        default="",
+        help=(
+            "JSON saved from https://eurl.io/api/spaces (while signed in). "
+            "Adds an Eurl join-link column, matched by space title"
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Disable progress output",
@@ -580,6 +692,7 @@ def main() -> None:
         sys.exit(1)
 
     group_fields = parse_group_by(args.group_by)
+    eurl_spaces = load_eurl_spaces(args.eurl_file) if args.eurl_file else None
     token = get_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -597,6 +710,7 @@ def main() -> None:
             max_pages=args.max_pages,
             max_consecutive_empty_pages=args.max_empty_pages,
             verbose=not args.quiet,
+            eurl_spaces=eurl_spaces,
         )
     except KeyboardInterrupt:
         print(

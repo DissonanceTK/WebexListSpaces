@@ -1,6 +1,6 @@
 # Webex Spaces Exporter
 
-This Python script retrieves the Webex group spaces you belong to and writes two files: `WebexSpaces.txt` and `WebexSpaces.csv`. Each file contains space names and deep links that open the space in the Webex app.
+This Python script retrieves the Webex group spaces you belong to and writes two files: `WebexSpaces.txt` and `WebexSpaces.csv`. Each file contains space names, a deep link that opens the space in the Webex desktop/mobile app, and a web link that opens it in Webex for web.
 
 ## Prerequisites
 
@@ -74,6 +74,19 @@ python export_webex_spaces.py --group-by team,creator
 
 Progress is printed while spaces are fetched (one line per API page). Use `--quiet` to disable it.
 
+### Eurl links (optional)
+
+[Eurl](https://eurl.io) gives a space a join link like `https://eurl.io/#<shortId>`. The ID is assigned by the Eurl bot, so it can't be derived from the Webex room ID. To include it:
+
+1. Sign in at https://eurl.io (it asks for your email), then open https://eurl.io/api/spaces in the same browser and save the JSON, e.g. as `eurl.json`.
+2. Run:
+
+   ```bash
+   python export_webex_spaces.py --eurl-file eurl.json
+   ```
+
+This adds an `Eurl` column to the CSV and an `Eurl:` line to the TXT. Matching is by space title, so only spaces with `list` enabled in Eurl will match, and titles shared by more than one space are left blank (with a warning). Nothing is posted to Webex or Eurl.
+
 ### Output files
 
 **`WebexSpaces.txt`** — plain text listing of space names and deep links.
@@ -83,9 +96,11 @@ Without grouping:
 ```
 Space Name: Project Alpha
 Space Link: webexteams://im?space=...
+Space Web Link: https://web.webex.com/spaces/...
 
 Space Name: Support Queue
 Space Link: webexteams://im?space=...
+Space Web Link: https://web.webex.com/spaces/...
 ```
 
 With `--group-by team,creator`:
@@ -97,21 +112,23 @@ With `--group-by team,creator`:
 
 Space Name: Project Alpha
 Space Link: webexteams://im?space=...
+Space Web Link: https://web.webex.com/spaces/...
 
 --- Created by others ---
 
 Space Name: Support Queue
 Space Link: webexteams://im?space=...
+Space Web Link: https://web.webex.com/spaces/...
 ```
 
 **`WebexSpaces.csv`** — tab-separated values with a header row.
 
 | Mode | CSV columns |
 | --- | --- |
-| Default | `Space Name`, `Space Link` |
-| `--group-by team` | `Team`, `Space Name`, `Space Link` |
-| `--group-by creator` | `Creator`, `Space Name`, `Space Link` |
-| `--group-by team,creator` | `Team`, `Creator`, `Space Name`, `Space Link` |
+| Default | `Space Name`, `Space Link`, `Space Web Link` |
+| `--group-by team` | `Team`, `Space Name`, `Space Link`, `Space Web Link` |
+| `--group-by creator` | `Creator`, `Space Name`, `Space Link`, `Space Web Link` |
+| `--group-by team,creator` | `Team`, `Creator`, `Space Name`, `Space Link`, `Space Web Link` |
 
 ### Grouping behavior
 
@@ -132,6 +149,7 @@ Webex App **space sections** (personal folders you create in the client) are not
 | `--page-size` | `100` | Rooms requested per API page |
 | `--max-pages` | `1000` | Safety limit on API pages fetched |
 | `--max-empty-pages` | `25` | Stop after this many consecutive empty pages |
+| `--eurl-file` | _(none)_ | JSON saved from `eurl.io/api/spaces`; adds an `Eurl` column |
 | `--quiet` | off | Disable progress output |
 
 By default, spaces are sorted by room ID during API pagination for reliable results on large accounts. Use `--sort-by lastactivity` if you prefer activity order, though Webex documents limitations for accounts in thousands of spaces.
